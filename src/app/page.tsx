@@ -32,18 +32,27 @@ export default function HomePage() {
   const [loading, setLoading] = useState(false);
   const [typingText, setTypingText] = useState("");
 
+  const [showMoreInfoButton, setShowMoreInfoButton] = useState(false);
+
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [chat, typingText, loading]);
 
+  // ------------------------------------------------------------
+  // SEND MESSAGE
+  // ------------------------------------------------------------
   async function handleSend(forced?: string) {
     const message = forced ?? input.trim();
     if (!message) return;
 
     setChat((prev) => [...prev, { sender: "user", text: message }]);
+
     if (!forced) setInput("");
+
+    // Reset place features on every new user query
+    setShowMoreInfoButton(false);
 
     setLoading(true);
     const parsed = parseUserMessage(message);
@@ -60,40 +69,48 @@ export default function HomePage() {
 
       const validCoords =
         Number.isFinite(data.lat) && Number.isFinite(data.lon);
-
       setCoords(validCoords ? { lat: data.lat, lon: data.lon } : null);
 
+      // Clean place coords
+      let cleanedPlaces: PlaceCoord[] = [];
+
       if (Array.isArray(data.placesCoords)) {
-        setPlacesCoords(
-          data.placesCoords.filter(
-            (p: any) =>
-              Number.isFinite(p.lat) && Number.isFinite(p.lon) && p.name
-          )
+        cleanedPlaces = data.placesCoords.filter(
+          (p: any) => p.name && Number.isFinite(p.lat) && Number.isFinite(p.lon)
         );
-      } else {
-        setPlacesCoords([]);
       }
 
-      setShowMap(
-        Array.isArray(data.placesCoords) && data.placesCoords.length > 0
-      );
+      setPlacesCoords(cleanedPlaces);
 
+      // Show map only if real places exist
+      setShowMap(cleanedPlaces.length > 0);
+
+      // Typing effect
       let i = 0;
-      const full = data.message || "I could not process your request.";
+      const full: string = data.message || "I could not process your request.";
+
       setTypingText("");
 
       const interval = setInterval(() => {
         setTypingText(full.slice(0, ++i));
         if (i >= full.length) {
           clearInterval(interval);
+
           setTypingText("");
+
           setChat((prev) => [...prev, { sender: "agent", text: full }]);
+
+          // Enable More Info only if the response included place suggestions
+          if (cleanedPlaces.length > 0) {
+            setShowMoreInfoButton(true);
+          }
         }
       }, 18);
     } catch {
       setLoading(false);
       setCoords(null);
       setShowMap(false);
+      setShowMoreInfoButton(false);
 
       setChat((prev) => [
         ...prev,
@@ -105,9 +122,11 @@ export default function HomePage() {
     }
   }
 
+  // ------------------------------------------------------------
+  // START CHAT
+  // ------------------------------------------------------------
   function startChat() {
     if (!welcomeInput.trim()) return;
-
     const first = welcomeInput.trim();
     setWelcomeInput("");
     setShowChat(true);
@@ -115,6 +134,43 @@ export default function HomePage() {
     setTimeout(() => handleSend(first), 200);
   }
 
+  // ------------------------------------------------------------
+  // FETCH MORE INFO
+  // ------------------------------------------------------------
+  async function fetchMoreInfo() {
+    if (placesCoords.length === 0) return;
+
+    const names = placesCoords.map((p) => p.name);
+
+    setShowMoreInfoButton(false);
+
+    try {
+      const res = await fetch("/api/placeinfo", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ places: names }),
+      });
+
+      const data = await res.json();
+
+      setChat((prev) => [
+        ...prev,
+        {
+          sender: "agent",
+          text: data?.info || "Could not load more details.",
+        },
+      ]);
+    } catch {
+      setChat((prev) => [
+        ...prev,
+        { sender: "agent", text: "Failed to load more information." },
+      ]);
+    }
+  }
+
+  // ------------------------------------------------------------
+  // RENDER
+  // ------------------------------------------------------------
   return (
     <div
       className={`grid h-full w-full pt-24 ${
@@ -128,6 +184,7 @@ export default function HomePage() {
         } justify-center`}
         style={{ paddingLeft: "2rem", paddingRight: "2rem" }}
       >
+        {/* WELCOME */}
         {!showChat && (
           <div className="w-full max-w-lg text-center fadeIn bg-black/20 backdrop-blur-xl py-10 px-7 rounded-2xl border border-purple-900/40 shadow-xl shadow-purple-900/40">
             <h1 className="text-4xl font-bold mb-6 text-purple-300 tracking-wide">
@@ -139,24 +196,26 @@ export default function HomePage() {
               onChange={(e) => setWelcomeInput(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && startChat()}
               placeholder="Ask something like: Plan my trip to Bangalore"
-              className="w-full rounded-xl border border-purple-700/40 bg-black/50 text-purple-200 px-4 py-3 text-sm outline-none focus:border-purple-400 focus:ring-2 focus:ring-purple-600/40 transition-all"
+              className="w-full rounded-xl border border-purple-700/40 bg-black/50 text-purple-200 px-4 py-3 text-sm outline-none"
             />
 
             <button
               onClick={startChat}
-              className="mt-5 rounded-xl bg-purple-600 px-7 py-2.5 text-sm font-semibold hover:bg-purple-700 shadow-purple-500/40 shadow-lg transition-all active:scale-95"
+              className="mt-5 rounded-xl bg-purple-600 px-7 py-2.5 text-sm font-semibold hover:bg-purple-700 shadow-purple-500/40 shadow-lg active:scale-95"
             >
               Ask
             </button>
           </div>
         )}
 
+        {/* CHAT PANEL */}
         {showChat && (
-          <div className="w-full max-w-xl max-h-[75vh] rounded-2xl border border-purple-900/40 bg-black/40 backdrop-blur-lg p-6 flex flex-col fadeInUp shadow-xl shadow-purple-900/30">
+          <div className="w-full max-w-xl max-h-[75vh] rounded-2xl border border-purple-900/40 bg-black/40 backdrop-blur-lg p-6 flex flex-col shadow-xl shadow-purple-900/30">
             <h1 className="text-xl font-semibold mb-4 text-purple-300 tracking-wide">
               TourAI Assistant
             </h1>
 
+            {/* MESSAGES */}
             <div className="flex-1 overflow-y-auto max-h-[60vh] space-y-4 pr-2 custom-scroll">
               {chat.map((msg, i) => (
                 <div
@@ -172,13 +231,13 @@ export default function HomePage() {
               ))}
 
               {typingText && (
-                <div className="max-w-[80%] px-4 py-2.5 rounded-xl text-sm bg-purple-900/50 text-purple-200 border border-purple-800/20 shadow shadow-purple-900/20 whitespace-pre-line">
+                <div className="max-w-[80%] px-4 py-2.5 rounded-xl text-sm bg-purple-900/50 text-purple-200 border border-purple-800/20 shadow whitespace-pre-line">
                   {typingText}
                 </div>
               )}
 
               {loading && (
-                <div className="max-w-[80%] px-4 py-2.5 rounded-xl text-sm bg-purple-900/50 text-purple-300 border border-purple-800/20 animate-fadePulse shadow shadow-purple-900/20">
+                <div className="max-w-[80%] px-4 py-2.5 rounded-xl text-sm bg-purple-900/50 text-purple-300 border border-purple-800/20 animate-fadePulse shadow">
                   Thinking…
                 </div>
               )}
@@ -186,17 +245,28 @@ export default function HomePage() {
               <div ref={bottomRef} />
             </div>
 
+            {/* MORE INFO BUTTON */}
+            {showMoreInfoButton && (
+              <button
+                onClick={fetchMoreInfo}
+                className="mt-3 self-start bg-purple-700 hover:bg-purple-800 text-white px-4 py-2 rounded-xl text-sm font-semibold shadow shadow-purple-800/40 active:scale-95"
+              >
+                More information about these places
+              </button>
+            )}
+
+            {/* INPUT */}
             <div className="mt-4 flex gap-2">
               <input
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && handleSend()}
                 placeholder="Type your message..."
-                className="flex-1 rounded-xl border border-purple-800/40 bg-black/50 text-purple-200 px-3 py-2 text-sm outline-none focus:border-purple-500 focus:ring-2 focus:ring-purple-600/40 transition-all"
+                className="flex-1 rounded-xl border border-purple-800/40 bg-black/50 text-purple-200 px-3 py-2 text-sm outline-none"
               />
               <button
                 onClick={() => handleSend()}
-                className="rounded-xl bg-purple-600 px-5 py-2 text-sm font-semibold hover:bg-purple-700 shadow-purple-500/40 shadow active:scale-95 transition-all"
+                className="rounded-xl bg-purple-600 px-5 py-2 text-sm font-semibold hover:bg-purple-700 shadow-purple-500/40 shadow active:scale-95"
               >
                 Send
               </button>
@@ -205,7 +275,7 @@ export default function HomePage() {
         )}
       </div>
 
-      {/* RIGHT MAP AREA */}
+      {/* RIGHT MAP */}
       <div
         className={`p-6 h-full transition-all duration-700 ${
           showMap ? "map-visible hidden lg:flex" : "map-hidden hidden"
